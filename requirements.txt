@@ -1,0 +1,24 @@
+# FastAPI
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# Database
+sqlalchemy==2.0.36
+pymysql==1.1.1
+cryptography==44.0.0
+
+# HTTP Client
+httpx==0.28.1
+aiofiles==24.1.0
+
+# File Processing
+python-magic==0.4.27
+pdf2image==1.17.0
+Pillow==11.0.0
+PyMuPDF==1.25.1
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.10.3
+pydantic-settings==2.7.0

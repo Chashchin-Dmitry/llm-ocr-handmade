@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  # MySQL Database
+  mysql:
+    image: mysql:8.0
+    container_name: ocr-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ocr_root_pass}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-ocr_documents}
+      MYSQL_USER: ${MYSQL_USER:-ocr_user}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ocr_pass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # vLLM Server for DeepSeek-OCR
+  vllm-ocr:
+    image: vllm/vllm-openai:v0.10.2
+    container_name: vllm-ocr
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_TOKEN=${HF_TOKEN:-}
+    ports:
+      - "8001:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      --model deepseek-ai/DeepSeek-OCR
+      --trust-remote-code
+      --max-model-len 4096
+      --gpu-memory-utilization 0.4
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # vLLM Server for Qwen (структуризация)
+  vllm-qwen:
+    image: vllm/vllm-openai:v0.10.2
+    container_name: vllm-qwen
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - HF_TOKEN=${HF_TOKEN:-}
+    ports:
+      - "8002:8000"
+    volumes:
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    command: >
+      --model Qwen/Qwen2.5-7B-Instruct
+      --trust-remote-code
+      --max-model-len 8192
+      --gpu-memory-utilization 0.5
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ocr-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-ocr_user}:${MYSQL_PASSWORD:-ocr_pass}@mysql:3306/${MYSQL_DATABASE:-ocr_documents}
+      - VLLM_OCR_URL=http://vllm-ocr:8000
+      - VLLM_QWEN_URL=http://vllm-qwen:8000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app/backend
+      - ./uploads:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  mysql_data:
