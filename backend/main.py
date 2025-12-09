@@ -7,11 +7,19 @@ FastAPI backend for document processing with DeepSeek-OCR and Qwen.
 import os
 import uuid
 import asyncio
+import logging
 from pathlib import Path
 from typing import List, Optional
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends, UploadFile, File, Query, BackgroundTasks
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -25,7 +33,7 @@ from backend.models import Schema, SchemaColumn, Document, OCRResult, ExtractedD
 from backend.schemas import (
     SchemaCreate, SchemaResponse, SchemaListResponse, SchemaColumnCreate,
     DocumentResponse, DocumentWithDataResponse, ProcessingStatusResponse,
-    HealthResponse, ModelStatus
+    HealthResponse, ModelStatus, PaginatedDocumentsResponse
 )
 from backend.services.ocr_service import ocr_service
 from backend.services.structurizer import structurizer_service
@@ -258,17 +266,34 @@ async def upload_documents(
     return documents
 
 
-@app.get("/api/documents/{schema_id}", response_model=List[DocumentWithDataResponse])
-def list_documents(schema_id: int, db: Session = Depends(get_db)):
-    """List all documents for a schema with extracted data."""
-    documents = db.query(Document).filter(Document.schema_id == schema_id).order_by(Document.created_at.desc()).all()
+@app.get("/api/documents/{schema_id}", response_model=PaginatedDocumentsResponse)
+def list_documents(
+    schema_id: int,
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    db: Session = Depends(get_db)
+):
+    """List documents for a schema with pagination."""
+    # Get total count
+    total = db.query(Document).filter(Document.schema_id == schema_id).count()
 
-    result = []
+    # Calculate pagination
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+    offset = (page - 1) * page_size
+
+    # Get paginated documents
+    documents = db.query(Document).filter(
+        Document.schema_id == schema_id
+    ).order_by(
+        Document.created_at.desc()
+    ).offset(offset).limit(page_size).all()
+
+    items = []
     for doc in documents:
         ocr_text = doc.ocr_result.raw_text if doc.ocr_result else None
         extracted = doc.extracted_data.data if doc.extracted_data else None
 
-        result.append(DocumentWithDataResponse(
+        items.append(DocumentWithDataResponse(
             id=doc.id,
             filename=doc.filename,
             original_filename=doc.original_filename,
@@ -280,7 +305,13 @@ def list_documents(schema_id: int, db: Session = Depends(get_db)):
             created_at=doc.created_at
         ))
 
-    return result
+    return PaginatedDocumentsResponse(
+        items=items,
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
 
 
 @app.delete("/api/documents/{document_id}")
@@ -305,7 +336,10 @@ async def process_document_task(document_id: int, db: Session):
     """Background task to process a single document."""
     doc = db.query(Document).filter(Document.id == document_id).first()
     if not doc:
+        logger.warning(f"Document {document_id} not found")
         return
+
+    logger.info(f"Starting processing document {document_id}: {doc.original_filename}")
 
     schema = db.query(Schema).filter(Schema.id == doc.schema_id).first()
     columns = [{"name": c.name, "description": c.description} for c in schema.columns]
@@ -314,8 +348,10 @@ async def process_document_task(document_id: int, db: Session):
         # Step 1: OCR
         doc.status = DocumentStatus.OCR_PROCESSING
         db.commit()
+        logger.info(f"Document {document_id}: Starting OCR")
 
         ocr_result = await ocr_service.process_image(doc.file_path)
+        logger.info(f"Document {document_id}: OCR completed in {ocr_result['processing_time']}ms")
 
         ocr_record = OCRResult(
             document_id=doc.id,
@@ -329,11 +365,13 @@ async def process_document_task(document_id: int, db: Session):
         # Step 2: Structuring
         doc.status = DocumentStatus.STRUCTURING
         db.commit()
+        logger.info(f"Document {document_id}: Starting structuring")
 
         struct_result = await structurizer_service.structure_data(
             ocr_result["text"],
             columns
         )
+        logger.info(f"Document {document_id}: Structuring completed in {struct_result['processing_time']}ms, confidence: {struct_result['confidence']}%")
 
         extracted = ExtractedData(
             document_id=doc.id,
@@ -344,8 +382,10 @@ async def process_document_task(document_id: int, db: Session):
         db.add(extracted)
         doc.status = DocumentStatus.COMPLETED
         db.commit()
+        logger.info(f"Document {document_id}: Processing completed successfully")
 
     except Exception as e:
+        logger.error(f"Document {document_id}: Processing failed - {str(e)}")
         doc.status = DocumentStatus.ERROR
         doc.error_message = str(e)
         db.commit()
@@ -391,6 +431,10 @@ async def process_batch(
 @app.get("/api/process/stream/{schema_id}")
 async def process_stream(schema_id: int, db: Session = Depends(get_db)):
     """SSE endpoint for real-time processing updates."""
+    # Validate schema exists
+    schema = db.query(Schema).filter(Schema.id == schema_id).first()
+    if not schema:
+        raise HTTPException(status_code=404, detail="Schema not found")
 
     async def event_generator():
         last_states = {}

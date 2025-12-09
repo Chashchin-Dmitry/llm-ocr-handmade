@@ -154,7 +154,7 @@
                     <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
                         <h3 class="font-medium text-gray-900">Documents</h3>
                         <div class="flex items-center gap-2">
-                            <span class="text-sm text-gray-500" x-text="documents.length + ' documents'"></span>
+                            <span class="text-sm text-gray-500" x-text="pagination.total + ' documents'"></span>
                             <button x-show="documents.some(d => d.status === 'pending' || d.status === 'error')"
                                     @click="processAll()"
                                     class="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
@@ -228,6 +228,27 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+
+                    <!-- Pagination -->
+                    <div x-show="pagination.total_pages > 1" class="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+                        <div class="text-sm text-gray-500">
+                            Page <span x-text="pagination.page"></span> of <span x-text="pagination.total_pages"></span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button @click="goToPage(pagination.page - 1)"
+                                    :disabled="pagination.page <= 1"
+                                    :class="pagination.page <= 1 ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'"
+                                    class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg transition-colors">
+                                Previous
+                            </button>
+                            <button @click="goToPage(pagination.page + 1)"
+                                    :disabled="pagination.page >= pagination.total_pages"
+                                    :class="pagination.page >= pagination.total_pages ? 'opacity-50 cursor-not-allowed' : 'hover:bg-gray-100'"
+                                    class="px-3 py-1.5 text-sm border border-gray-300 rounded-lg transition-colors">
+                                Next
+                            </button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -378,6 +399,14 @@ function app() {
         documents: [],
         health: { ocr: 'loading', qwen: 'loading' },
 
+        // Pagination
+        pagination: {
+            page: 1,
+            page_size: 20,
+            total: 0,
+            total_pages: 1
+        },
+
         // Modals
         showCreateSchema: false,
         showAddColumn: false,
@@ -429,13 +458,24 @@ function app() {
         async selectSchema(schema) {
             const res = await fetch(`/api/schemas/${schema.id}`);
             this.selectedSchema = await res.json();
+            this.pagination.page = 1;  // Reset to first page
             await this.loadDocuments();
         },
 
         async loadDocuments() {
             if (!this.selectedSchema) return;
-            const res = await fetch(`/api/documents/${this.selectedSchema.id}`);
-            this.documents = await res.json();
+            const res = await fetch(`/api/documents/${this.selectedSchema.id}?page=${this.pagination.page}&page_size=${this.pagination.page_size}`);
+            const data = await res.json();
+            this.documents = data.items;
+            this.pagination.total = data.total;
+            this.pagination.page = data.page;
+            this.pagination.total_pages = data.total_pages;
+        },
+
+        async goToPage(page) {
+            if (page < 1 || page > this.pagination.total_pages) return;
+            this.pagination.page = page;
+            await this.loadDocuments();
         },
 
         async createSchema() {

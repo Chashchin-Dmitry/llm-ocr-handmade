@@ -2,11 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including LibreOffice for DOC/DOCX conversion
 RUN apt-get update && apt-get install -y \
     libmagic1 \
     poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
+    libreoffice-writer \
+    libreoffice-common \
+    fonts-liberation \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Copy requirements and install
 COPY requirements.txt .

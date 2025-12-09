@@ -87,6 +87,15 @@ class DocumentWithDataResponse(BaseModel):
         from_attributes = True
 
 
+class PaginatedDocumentsResponse(BaseModel):
+    """Paginated list of documents."""
+    items: List[DocumentWithDataResponse]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
 # ============ Processing ============
 
 class ProcessingStatusResponse(BaseModel):

@@ -41,23 +41,44 @@ class StructurizerService:
             return {"status": "offline", "error": str(e)}
 
     def _extract_json(self, text: str) -> dict:
-        """Extract JSON from model response."""
-        # Try to find JSON in response
-        json_match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if json_match:
-            try:
-                return json.loads(json_match.group())
-            except json.JSONDecodeError:
-                pass
-
-        # Try to parse entire response as JSON
+        """Extract JSON from model response, supporting nested objects."""
+        # Method 1: Try to parse entire response as JSON
         try:
-            return json.loads(text)
+            return json.loads(text.strip())
         except json.JSONDecodeError:
             pass
 
+        # Method 2: Find JSON by matching balanced braces
+        start_idx = text.find('{')
+        if start_idx != -1:
+            brace_count = 0
+            end_idx = start_idx
+
+            for i, char in enumerate(text[start_idx:], start_idx):
+                if char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end_idx = i + 1
+                        break
+
+            if brace_count == 0:
+                try:
+                    return json.loads(text[start_idx:end_idx])
+                except json.JSONDecodeError:
+                    pass
+
+        # Method 3: Try to extract JSON from markdown code block
+        code_block_match = re.search(r'```(?:json)?\s*(\{[\s\S]*?\})\s*```', text)
+        if code_block_match:
+            try:
+                return json.loads(code_block_match.group(1))
+            except json.JSONDecodeError:
+                pass
+
         # Return error if no valid JSON found
-        return {"_error": "Failed to parse JSON", "_raw": text}
+        return {"_error": "Failed to parse JSON", "_raw": text[:500]}
 
     async def structure_data(self, ocr_text: str, columns: list[dict]) -> dict:
         """

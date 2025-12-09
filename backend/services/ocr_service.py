@@ -6,9 +6,10 @@ import httpx
 import base64
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List
 from backend.config import get_settings
 from backend.prompts import OCR_SYSTEM_PROMPT, OCR_USER_PROMPT
+from backend.services.file_converter import file_converter
 
 settings = get_settings()
 
@@ -57,23 +58,11 @@ class OCRService:
         }
         return mime_types.get(ext, "image/png")
 
-    async def process_image(self, file_path: str) -> dict:
-        """
-        Process an image with DeepSeek-OCR.
+    async def _process_single_image(self, image_path: str) -> str:
+        """Process a single image and return OCR text."""
+        image_base64 = self._encode_image(image_path)
+        mime_type = self._get_mime_type(image_path)
 
-        Args:
-            file_path: Path to the image file
-
-        Returns:
-            dict with "text" and "processing_time"
-        """
-        start_time = time.time()
-
-        # Encode image
-        image_base64 = self._encode_image(file_path)
-        mime_type = self._get_mime_type(file_path)
-
-        # Build request for vLLM OpenAI-compatible API
         payload = {
             "model": "deepseek-ai/DeepSeek-OCR",
             "messages": [
@@ -98,7 +87,7 @@ class OCRService:
                 }
             ],
             "max_tokens": 4096,
-            "temperature": 0.1  # Low temperature for accuracy
+            "temperature": 0.1
         }
 
         async with httpx.AsyncClient() as client:
@@ -110,13 +99,45 @@ class OCRService:
             response.raise_for_status()
 
         result = response.json()
-        text = result["choices"][0]["message"]["content"]
-        processing_time = int((time.time() - start_time) * 1000)
+        return result["choices"][0]["message"]["content"]
 
-        return {
-            "text": text,
-            "processing_time": processing_time
-        }
+    async def process_image(self, file_path: str) -> dict:
+        """
+        Process any document (image, PDF) with DeepSeek-OCR.
+
+        Args:
+            file_path: Path to the file (image or PDF)
+
+        Returns:
+            dict with "text" and "processing_time"
+        """
+        start_time = time.time()
+
+        # Convert file to images if needed
+        image_paths = file_converter.convert_to_images(file_path)
+
+        try:
+            # Process all pages
+            all_texts = []
+            for i, image_path in enumerate(image_paths):
+                text = await self._process_single_image(image_path)
+
+                # Add page marker for multi-page documents
+                if len(image_paths) > 1:
+                    all_texts.append(f"--- Page {i + 1} ---\n{text}")
+                else:
+                    all_texts.append(text)
+
+            combined_text = "\n\n".join(all_texts)
+            processing_time = int((time.time() - start_time) * 1000)
+
+            return {
+                "text": combined_text,
+                "processing_time": processing_time
+            }
+        finally:
+            # Cleanup temporary images
+            file_converter.cleanup_temp_images(image_paths, file_path)
 
 
 # Singleton instance
