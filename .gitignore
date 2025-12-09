@@ -32,3 +32,16 @@ mysql_data/
 # Cache
 .cache/
 *.cache
+
+# Models (stored in ~/.cache/huggingface, not in repo)
+models/
+*.bin
+*.safetensors
+*.gguf
+
+# Large files
+*.pdf
+*.whl
+
+# HuggingFace cache (если случайно в проекте)
+.huggingface/

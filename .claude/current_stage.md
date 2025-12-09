@@ -1,240 +1,241 @@
 # OCR Document Digitization - Текущий этап разработки
 
-> Последнее обновление: 2025-12-09
+> Последнее обновление: 2025-12-09 19:40
 
 ---
 
-## ⚠️ СЛЕДУЮЩИЙ ШАГ: Включить SVM в BIOS
+## ТЕКУЩИЙ СТАТУС: Скачивание vLLM v0.11.2 (~15GB)
 
-WSL2 требует виртуализацию. Нужно:
+### Что нужно сделать завтра
 
-1. **Перезагрузить компьютер**
-2. **Войти в BIOS** (Del или F2 при загрузке)
-3. **Найти:** Advanced → CPU Configuration → **SVM Mode**
-4. **Включить:** SVM Mode → **Enabled**
-5. **Сохранить:** F10 → Yes
+1. **Дождаться загрузки образа vLLM v0.11.2** (~15GB)
+   ```bash
+   cd "C:/Users/User/Desktop/Projects myself/deepseek ocr project/llm-ocr-handmade"
+   docker-compose up -d vllm-ocr vllm-qwen
+   ```
 
-После этого запустить:
+2. **Проверить запуск контейнеров**
+   ```bash
+   docker ps
+   docker-compose logs -f vllm-ocr vllm-qwen
+   ```
+
+3. **Дождаться загрузки моделей** (при первом запуске)
+   - DeepSeek-OCR: ~6GB
+   - Qwen2.5-7B: ~15GB
+   - Ждать "Application startup complete"
+
+4. **Запустить backend**
+   ```bash
+   docker-compose up -d backend
+   ```
+
+5. **Проверить health**
+   ```bash
+   curl http://localhost:8001/health  # OCR
+   curl http://localhost:8002/health  # Qwen
+   curl http://localhost:8000/api/health  # Backend
+   ```
+
+6. **Открыть UI**
+   - http://localhost:8000
+
+---
+
+## Причинно-следственная связь проблемы с vLLM версиями
+
+### 1. Первая попытка: vLLM v0.10.2
+**Что сделали:** Попробовали запустить DeepSeek-OCR с `vllm/vllm-openai:v0.10.2`
+
+**Результат:** ОШИБКА
+```
+Model architectures ['DeepseekOCRForCausalLM'] are not supported for now.
+```
+
+**Причина:** В v0.10.2 архитектура DeepSeek-OCR ещё не была добавлена в upstream vLLM.
+
+---
+
+### 2. Изучили официальную документацию DeepSeek-OCR
+
+**Источник:** https://github.com/deepseek-ai/DeepSeek-OCR
+
+**Нашли ДВА варианта запуска:**
+
+#### Вариант A: Их собственный патченый vLLM 0.8.5
 ```bash
-wsl -d Ubuntu
-cd /путь/к/проекту
-docker-compose up -d
+pip install vllm-0.8.5+cu118-cp38-abi3-manylinux1_x86_64.whl
+```
+- Для CUDA 11.8
+- Скачивается как .whl файл с GitHub releases
+- НЕ Docker образ, а pip пакет
+- Требует ручной установки окружения
+
+#### Вариант B: Upstream vLLM v0.11.1+ (nightly)
+```bash
+# Until v0.11.1 release, you need to install vLLM from nightly build
+uv pip install -U vllm --pre --extra-index-url https://wheels.vllm.ai/nightly
+```
+- Официальная поддержка в upstream vLLM добавлена **2025/10/23**
+- Документация говорит нужен v0.11.1+
+
+---
+
+### 3. Проверили Docker Hub
+
+**Доступные образы vLLM:**
+- `vllm/vllm-openai:v0.12.0` - ЕСТЬ, но требует CUDA 12.9+
+- `vllm/vllm-openai:v0.11.2` - ЕСТЬ, работает с CUDA 12.8
+- `vllm/vllm-openai:v0.11.1` - ЕСТЬ, работает с CUDA 12.8
+- `vllm/vllm-openai:v0.10.2` - НЕ поддерживает DeepSeek-OCR
+- `vllm/vllm-openai:v0.8.5` - БЕЗ патчей DeepSeek
+
+---
+
+### 4. Попытка v0.12.0 - ОШИБКА CUDA
+
+**Ошибка:**
+```
+nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.9
+please update your driver to a newer version, or use an earlier cuda container
 ```
 
----
+**Причина:** vLLM v0.12.0 требует CUDA 12.9+, а у нас CUDA 12.8 (драйвер 571.96)
 
-## Цель проекта
-
-Создание MVP системы для оцифровки документов (PNG, PDF, DOC) с использованием:
-- **DeepSeek-OCR 3B** — распознавание текста из изображений
-- **Qwen2.5-7B** — структуризация данных в JSON по пользовательской схеме
-
-**Ключевая фича**: пользователь сам создаёт колонки и описания к ним, AI использует эти описания для извлечения данных.
+**Альтернативы:**
+1. Обновить драйвер до 576.57+ (для CUDA 12.9)
+2. Использовать vLLM v0.11.2 (работает с CUDA 12.8) ✅
 
 ---
 
-## ✅ MVP ГОТОВ
+### 5. РЕШЕНИЕ: vLLM v0.11.2
 
-### Что реализовано:
+**docker-compose.yml:**
+```yaml
+vllm-ocr:
+  image: vllm/vllm-openai:v0.11.2  # CUDA 12.8 совместимо!
+  command: >
+    --model deepseek-ai/DeepSeek-OCR
+    --trust-remote-code
+    --max-model-len 4096
+    --gpu-memory-utilization 0.4
+    --enable-prefix-caching false
 
-#### 1. Полная поддержка форматов
-- **PNG/JPG/JPEG** — прямая обработка
-- **PDF** — автоматическая конвертация страниц в изображения через PyMuPDF
-- **DOC/DOCX** — конвертация через LibreOffice в Docker
-
-#### 2. Конвертер файлов
-**Файл:** `backend/services/file_converter.py`
-- Автоматическое определение типа файла
-- Конвертация PDF в изображения (200 DPI)
-- Конвертация DOC/DOCX → PDF → изображения
-- Поддержка многостраничных документов
-
-#### 3. Улучшенный JSON parsing
-**Файл:** `backend/services/structurizer.py`
-- Поддержка вложенных JSON объектов
-- Поиск JSON в markdown code blocks
-- Matching balanced braces algorithm
-- Fallback при ошибках парсинга
-
-#### 4. Логирование
-**Файл:** `backend/main.py`
-- Логирование всех этапов обработки документов
-- Время выполнения OCR и структуризации
-- Ошибки с полным контекстом
-
-#### 5. Пагинация документов
-- Backend: query параметры `page` и `page_size`
-- Frontend: навигация между страницами
-- Лимит 100 документов на страницу
-
-#### 6. Безопасность SSE
-- Проверка существования schema_id перед стримом
-- Защита от бесконечных циклов
-
----
-
-## Завершённые этапы
-
-### 1. Инфраструктура и Docker
-**Файлы:** `docker-compose.yml`, `Dockerfile`, `.env.example`
-
-**Что сделано:**
-- Настроен Docker Compose с тремя сервисами:
-  - `vllm-ocr` — DeepSeek-OCR на порту 8001
-  - `vllm-qwen` — Qwen2.5-7B на порту 8002
-  - `mysql` — база данных на порту 3306
-- Оптимизировано использование GPU (40% + 50% VRAM для 3090 24GB)
-- Добавлен LibreOffice для конвертации DOC/DOCX
-
----
-
-### 2. Схема базы данных
-**Файл:** `backend/models.py`
-
-**Таблицы:**
-```
-schemas              — Пользовательские схемы (коллекции колонок)
-schema_columns       — Колонки с описаниями для AI
-documents            — Загруженные документы
-ocr_results          — Сырой текст от DeepSeek-OCR
-extracted_data       — Структурированный JSON от Qwen
+vllm-qwen:
+  image: vllm/vllm-openai:v0.11.2  # CUDA 12.8 совместимо!
+  command: >
+    --model Qwen/Qwen2.5-7B-Instruct
+    --trust-remote-code
+    --max-model-len 8192
+    --gpu-memory-utilization 0.5
 ```
 
----
-
-### 3. Сервисы для работы с моделями
-**Файлы:**
-- `backend/services/ocr_service.py` — OCR с поддержкой многостраничных документов
-- `backend/services/structurizer.py` — структуризация с улучшенным JSON parsing
-- `backend/services/file_converter.py` — конвертация PDF/DOC/DOCX
+**Почему v0.11.2:**
+- DeepSeek-OCR поддержка добавлена в v0.11.1 (2025/10/23)
+- v0.11.2 работает с CUDA 12.8
+- v0.12.0 требует CUDA 12.9+ (несовместимо с текущим драйвером)
 
 ---
 
-### 4. FastAPI Backend
-**Файл:** `backend/main.py`
+## Системные требования
 
-**API endpoints:**
-- `GET /api/health` — статус системы и моделей
-- `POST /api/schemas` — создание схемы
-- `GET /api/schemas` — список схем
-- `GET /api/schemas/{id}` — получение схемы с колонками
-- `DELETE /api/schemas/{id}` — удаление схемы
-- `POST /api/schemas/{id}/columns` — добавление колонки
-- `DELETE /api/schemas/{id}/columns/{col_id}` — удаление колонки
-- `POST /api/documents/upload/{schema_id}` — загрузка файлов
-- `GET /api/documents/{schema_id}?page=1&page_size=20` — список документов с пагинацией
-- `DELETE /api/documents/{id}` — удаление документа
-- `POST /api/process/{doc_id}` — обработка одного документа
-- `POST /api/process/batch/{schema_id}` — обработка всех pending документов
-- `GET /api/process/stream/{schema_id}` — SSE для real-time обновлений
+### Наша конфигурация
+| Параметр | Значение |
+|----------|----------|
+| GPU | NVIDIA RTX 3090 24GB |
+| Driver | 571.96 |
+| CUDA | 12.8 |
+| Docker | Desktop с WSL2 |
+| MySQL | 8.0 (на хосте, порт 3306) |
+
+### GPU распределение
+- DeepSeek-OCR: 40% VRAM (~10GB)
+- Qwen2.5-7B: 50% VRAM (~12GB)
+- Итого: ~22GB из 24GB
 
 ---
 
-### 5. Frontend
-**Файл:** `frontend/index.html`
+## Выполненные шаги (2025-12-09)
 
-**Реализовано:**
-- Создание схем с колонками через модальное окно
-- Добавление/удаление колонок с описаниями для AI
-- Drag-and-drop загрузка файлов
-- Real-time таблица с результатами через SSE
-- Индикаторы статуса моделей (online/offline)
-- Просмотр деталей документа (OCR текст + extracted JSON)
-- **Пагинация документов**
+1. ✅ **SVM Mode включён** - WSL2 теперь работает
+2. ✅ **Docker Desktop запущен** - GPU доступна
+3. ✅ **GPU проверена** - RTX 3090 видна в контейнерах
+4. ✅ **БД создана** - `ocr_documents` в существующем MySQL
+5. ✅ **docker-compose обновлён** - использует хостовый MySQL через `host.docker.internal`
+6. ✅ **Версия vLLM исследована** - нужен v0.11.2 (не v0.12.0!)
+7. ⏳ **Образ v0.11.2 скачивается** - ~15GB
 
 ---
 
-## Ссылки на документацию
-
-| Компонент | Документация |
-|-----------|-------------|
-| DeepSeek-OCR | [HuggingFace Model](https://huggingface.co/deepseek-ai/DeepSeek-OCR) |
-| vLLM | [vLLM Docs](https://docs.vllm.ai/) |
-| Qwen2.5 | [Qwen GitHub](https://github.com/QwenLM/Qwen2.5) |
-| FastAPI | [FastAPI Docs](https://fastapi.tiangolo.com/) |
-| SQLAlchemy | [SQLAlchemy Docs](https://docs.sqlalchemy.org/) |
-| Tailwind CSS | [Tailwind Docs](https://tailwindcss.com/docs) |
-| Alpine.js | [Alpine.js Docs](https://alpinejs.dev/) |
-
----
-
-## Команды для запуска
+## Команды для завтра
 
 ```bash
-# 1. Копировать .env
-cp .env.example .env
+# 1. Перейти в папку проекта
+cd "C:/Users/User/Desktop/Projects myself/deepseek ocr project/llm-ocr-handmade"
 
-# 2. Запустить всё
-docker-compose up -d
+# 2. Запустить модели (продолжит загрузку образа если не завершена)
+docker-compose up -d vllm-ocr vllm-qwen
 
-# 3. Открыть в браузере
-http://localhost:8000
+# 3. Следить за логами
+docker-compose logs -f vllm-ocr vllm-qwen
 
-# Логи
-docker-compose logs -f
+# 4. Когда появится "Application startup complete" - запустить backend
+docker-compose up -d backend
 
-# Только MySQL (для разработки без моделей)
-docker-compose up -d mysql
-uvicorn backend.main:app --reload
+# 5. Проверить health
+curl http://localhost:8000/api/health
+
+# 6. Открыть в браузере
+start http://localhost:8000
 ```
 
 ---
 
-## Архитектура
+## Важные файлы
 
+| Файл | Описание |
+|------|----------|
+| `docker-compose.yml` | Конфигурация контейнеров (v0.11.2) |
+| `.env` | MySQL пароль и настройки |
+| `backend/services/ocr_service.py` | Клиент для DeepSeek-OCR |
+| `backend/services/structurizer.py` | Клиент для Qwen |
+| `.claude/current_stage.md` | Этот файл |
+| `.claude/CLAUDE.md` | Общая документация проекта |
+
+---
+
+## Troubleshooting
+
+### Если CUDA ошибка (cuda>=12.9)
+Значит случайно используется v0.12.0. Проверить:
+```bash
+docker-compose config | grep image
 ```
-+---------------------------------------------------------------+
-|                        Frontend (HTML)                         |
-|              Tailwind CSS + Alpine.js + SSE                    |
-+---------------------------------------------------------------+
-                              |
-                              v
-+---------------------------------------------------------------+
-|                    FastAPI Backend (:8000)                     |
-|         /api/schemas, /api/documents, /api/process             |
-+---------------------------------------------------------------+
-          |                    |                    |
-          v                    v                    v
-+-----------------+  +-----------------+  +-----------------+
-| DeepSeek-OCR    |  |  Qwen2.5-7B     |  |     MySQL       |
-| vLLM (:8001)    |  |  vLLM (:8002)   |  |    (:3306)      |
-| 3B params       |  |  7B params      |  |                 |
-| ~8GB VRAM       |  |  ~14GB VRAM     |  |                 |
-+-----------------+  +-----------------+  +-----------------+
+Должно быть `vllm/vllm-openai:v0.11.2`
+
+### Если DeepSeek-OCR не поддерживается
+Проверить версию vLLM в контейнере:
+```bash
+docker exec vllm-ocr pip show vllm
+```
+Должна быть >= 0.11.1
+
+### MySQL пароль со спецсимволами
+Пароль `79bFsw!EBqcfK!MY` требует config файл:
+```bash
+cat > /tmp/mysql_init.cnf << 'EOF'
+[client]
+user=root
+password=79bFsw!EBqcfK!MY
+EOF
+mysql --defaults-file=/tmp/mysql_init.cnf -e "SHOW DATABASES;"
+rm /tmp/mysql_init.cnf
 ```
 
 ---
 
-## Поток данных
+## Ссылки
 
-```
-1. Пользователь создаёт схему
-   - Указывает название схемы
-   - Добавляет колонки с описаниями для AI
-   - Пример: "invoice_num" -> "Номер счёта в верхней части документа"
-
-2. Пользователь загружает документы
-   - Drag-and-drop или выбор файлов
-   - Поддерживаемые форматы: PNG, JPG, PDF, DOC, DOCX
-   - PDF/DOC автоматически конвертируются в изображения
-   - Файлы сохраняются в uploads/
-
-3. Запуск обработки
-   - Пользователь нажимает "Process All" или "Process" для отдельного документа
-   - Backend запускает background task
-
-4. DeepSeek-OCR извлекает текст
-   - Изображение кодируется в base64
-   - Многостраничные документы обрабатываются постранично
-   - Результат сохраняется в ocr_results
-
-5. Qwen структурирует данные
-   - Получает OCR текст + описания колонок
-   - Формирует JSON с извлечёнными данными
-   - Результат сохраняется в extracted_data
-
-6. Real-time обновление UI
-   - SSE отправляет обновления статуса
-   - Таблица обновляется по мере обработки
-   - Пагинация для больших объёмов документов
-```
+- [DeepSeek-OCR GitHub](https://github.com/deepseek-ai/DeepSeek-OCR)
+- [vLLM Docker Hub](https://hub.docker.com/r/vllm/vllm-openai/tags)
+- [NVIDIA CUDA Compatibility](https://docs.nvidia.com/deploy/cuda-compatibility/)

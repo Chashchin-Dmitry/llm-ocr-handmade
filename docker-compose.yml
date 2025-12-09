@@ -1,29 +1,16 @@
 version: '3.8'
 
 services:
-  # MySQL Database
-  mysql:
-    image: mysql:8.0
-    container_name: ocr-mysql
-    restart: unless-stopped
-    environment:
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-ocr_root_pass}
-      MYSQL_DATABASE: ${MYSQL_DATABASE:-ocr_documents}
-      MYSQL_USER: ${MYSQL_USER:-ocr_user}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-ocr_pass}
-    ports:
-      - "3306:3306"
-    volumes:
-      - mysql_data:/var/lib/mysql
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+  # NOTE: MySQL отключен - используем существующий на хосте
+  # mysql:
+  #   image: mysql:8.0
+  #   container_name: ocr-mysql
+  #   ...
 
-  # vLLM Server for DeepSeek-OCR
+  # vLLM Server for DeepSeek-OCR (требует vLLM v0.11+)
+  # v0.12.0 требует CUDA 12.9+, у нас CUDA 12.8, поэтому v0.11.2
   vllm-ocr:
-    image: vllm/vllm-openai:v0.10.2
+    image: vllm/vllm-openai:v0.11.2
     container_name: vllm-ocr
     runtime: nvidia
     environment:
@@ -38,6 +25,7 @@ services:
       --trust-remote-code
       --max-model-len 4096
       --gpu-memory-utilization 0.4
+      --enable-prefix-caching false
     deploy:
       resources:
         reservations:
@@ -47,8 +35,9 @@ services:
               capabilities: [gpu]
 
   # vLLM Server for Qwen (структуризация)
+  # v0.12.0 требует CUDA 12.9+, у нас CUDA 12.8, поэтому v0.11.2
   vllm-qwen:
-    image: vllm/vllm-openai:v0.10.2
+    image: vllm/vllm-openai:v0.11.2
     container_name: vllm-qwen
     runtime: nvidia
     environment:
@@ -79,18 +68,16 @@ services:
     container_name: ocr-backend
     restart: unless-stopped
     environment:
-      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-ocr_user}:${MYSQL_PASSWORD:-ocr_pass}@mysql:3306/${MYSQL_DATABASE:-ocr_documents}
+      # Используем существующий MySQL на хосте (host.docker.internal)
+      - DATABASE_URL=mysql+pymysql://${MYSQL_USER:-root}:${MYSQL_PASSWORD}@host.docker.internal:3306/${MYSQL_DATABASE:-ocr_documents}
       - VLLM_OCR_URL=http://vllm-ocr:8000
       - VLLM_QWEN_URL=http://vllm-qwen:8000
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app/backend
+      - ./frontend:/app/frontend
       - ./uploads:/app/uploads
-    depends_on:
-      mysql:
-        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command: uvicorn backend.main:app --host 0.0.0.0 --port 8000 --reload
-
-volumes:
-  mysql_data:
