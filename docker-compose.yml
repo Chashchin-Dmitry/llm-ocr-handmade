@@ -49,8 +49,8 @@ services:
     command: >
       --model Qwen/Qwen2.5-1.5B-Instruct
       --trust-remote-code
-      --max-model-len 2048
-      --gpu-memory-utilization 0.20
+      --max-model-len 16384
+      --gpu-memory-utilization 0.35
     deploy:
       resources:
         reservations:

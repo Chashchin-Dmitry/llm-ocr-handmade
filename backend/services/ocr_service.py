@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 from typing import Optional, List
 from backend.config import get_settings
-from backend.prompts import OCR_SYSTEM_PROMPT, OCR_USER_PROMPT
+from backend.prompts import OCR_USER_PROMPT
 from backend.services.file_converter import file_converter
 
 settings = get_settings()
@@ -63,13 +63,11 @@ class OCRService:
         image_base64 = self._encode_image(image_path)
         mime_type = self._get_mime_type(image_path)
 
+        # DeepSeek-OCR uses special format: <image>\n<prompt>
+        # No system prompt, just user message with image and text
         payload = {
             "model": "deepseek-ai/DeepSeek-OCR",
             "messages": [
-                {
-                    "role": "system",
-                    "content": OCR_SYSTEM_PROMPT
-                },
                 {
                     "role": "user",
                     "content": [
@@ -86,8 +84,9 @@ class OCRService:
                     ]
                 }
             ],
-            "max_tokens": 4096,
-            "temperature": 0.1
+            "max_tokens": 3500,
+            "temperature": 0.0,
+            "skip_special_tokens": False
         }
 
         async with httpx.AsyncClient() as client:
@@ -96,6 +95,12 @@ class OCRService:
                 json=payload,
                 timeout=self.timeout
             )
+
+            # Log error details before raising
+            if response.status_code != 200:
+                import logging
+                logging.error(f"OCR API error {response.status_code}: {response.text}")
+
             response.raise_for_status()
 
         result = response.json()

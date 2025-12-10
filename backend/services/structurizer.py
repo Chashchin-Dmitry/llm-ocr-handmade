@@ -98,7 +98,7 @@ class StructurizerService:
 
         # Build request for vLLM OpenAI-compatible API
         payload = {
-            "model": "Qwen/Qwen2.5-7B-Instruct",
+            "model": "Qwen/Qwen2.5-1.5B-Instruct",
             "messages": [
                 {
                     "role": "system",
@@ -109,7 +109,7 @@ class StructurizerService:
                     "content": user_prompt
                 }
             ],
-            "max_tokens": 2048,
+            "max_tokens": 1024,
             "temperature": 0.1  # Low temperature for consistency
         }
 
@@ -119,6 +119,12 @@ class StructurizerService:
                 json=payload,
                 timeout=self.timeout
             )
+
+            # Log error details before raising
+            if response.status_code != 200:
+                import logging
+                logging.error(f"Qwen API error {response.status_code}: {response.text}")
+
             response.raise_for_status()
 
         result = response.json()

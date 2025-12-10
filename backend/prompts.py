@@ -6,18 +6,20 @@ Prompts are designed to be clear and produce consistent results.
 
 
 # ============ OCR Prompt (DeepSeek-OCR) ============
+# DeepSeek-OCR uses special prompt format: <image>\n<prompt>
+# See: https://github.com/deepseek-ai/DeepSeek-OCR
 
-OCR_SYSTEM_PROMPT = """Ты - эксперт по распознаванию текста из документов.
-Твоя задача - извлечь ВЕСЬ текст из изображения документа максимально точно.
+# For documents with layout preservation (tables, structure)
+OCR_PROMPT_DOCUMENT = "<|grounding|>Convert the document to markdown."
 
-Правила:
-1. Сохраняй структуру документа (заголовки, абзацы, списки, таблицы)
-2. Для таблиц используй markdown формат
-3. Если текст неразборчив - укажи [неразборчиво]
-4. Сохраняй числа, даты, суммы точно как написано
-5. Не добавляй ничего от себя - только то, что видишь"""
+# For simple OCR without layout
+OCR_PROMPT_SIMPLE = "Free OCR."
 
-OCR_USER_PROMPT = """Извлеки весь текст из этого документа. Сохрани структуру и форматирование."""
+# Default prompt for documents
+OCR_USER_PROMPT = OCR_PROMPT_DOCUMENT
+
+# Legacy - not used by DeepSeek-OCR
+OCR_SYSTEM_PROMPT = ""
 
 
 # ============ Structuring Prompt (Qwen) ============

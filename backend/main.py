@@ -28,7 +28,7 @@ from sqlalchemy import func
 import aiofiles
 
 from backend.config import get_settings
-from backend.database import get_db, init_db, engine, Base
+from backend.database import get_db, init_db, engine, Base, SessionLocal
 from backend.models import Schema, SchemaColumn, Document, OCRResult, ExtractedData, DocumentStatus
 from backend.schemas import (
     SchemaCreate, SchemaResponse, SchemaListResponse, SchemaColumnCreate,
@@ -332,63 +332,68 @@ def delete_document(document_id: int, db: Session = Depends(get_db)):
 
 # ============ Processing ============
 
-async def process_document_task(document_id: int, db: Session):
+async def process_document_task(document_id: int):
     """Background task to process a single document."""
-    doc = db.query(Document).filter(Document.id == document_id).first()
-    if not doc:
-        logger.warning(f"Document {document_id} not found")
-        return
-
-    logger.info(f"Starting processing document {document_id}: {doc.original_filename}")
-
-    schema = db.query(Schema).filter(Schema.id == doc.schema_id).first()
-    columns = [{"name": c.name, "description": c.description} for c in schema.columns]
-
+    # Create own session - don't use request session
+    db = SessionLocal()
     try:
-        # Step 1: OCR
-        doc.status = DocumentStatus.OCR_PROCESSING
-        db.commit()
-        logger.info(f"Document {document_id}: Starting OCR")
+        doc = db.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            logger.warning(f"Document {document_id} not found")
+            return
 
-        ocr_result = await ocr_service.process_image(doc.file_path)
-        logger.info(f"Document {document_id}: OCR completed in {ocr_result['processing_time']}ms")
+        logger.info(f"Starting processing document {document_id}: {doc.original_filename}")
 
-        ocr_record = OCRResult(
-            document_id=doc.id,
-            raw_text=ocr_result["text"],
-            processing_time=ocr_result["processing_time"]
-        )
-        db.add(ocr_record)
-        doc.status = DocumentStatus.OCR_DONE
-        db.commit()
+        schema = db.query(Schema).filter(Schema.id == doc.schema_id).first()
+        columns = [{"name": c.name, "description": c.description} for c in schema.columns]
 
-        # Step 2: Structuring
-        doc.status = DocumentStatus.STRUCTURING
-        db.commit()
-        logger.info(f"Document {document_id}: Starting structuring")
+        try:
+            # Step 1: OCR
+            doc.status = DocumentStatus.OCR_PROCESSING
+            db.commit()
+            logger.info(f"Document {document_id}: Starting OCR")
 
-        struct_result = await structurizer_service.structure_data(
-            ocr_result["text"],
-            columns
-        )
-        logger.info(f"Document {document_id}: Structuring completed in {struct_result['processing_time']}ms, confidence: {struct_result['confidence']}%")
+            ocr_result = await ocr_service.process_image(doc.file_path)
+            logger.info(f"Document {document_id}: OCR completed in {ocr_result['processing_time']}ms")
 
-        extracted = ExtractedData(
-            document_id=doc.id,
-            data=struct_result["data"],
-            confidence=struct_result["confidence"],
-            processing_time=struct_result["processing_time"]
-        )
-        db.add(extracted)
-        doc.status = DocumentStatus.COMPLETED
-        db.commit()
-        logger.info(f"Document {document_id}: Processing completed successfully")
+            ocr_record = OCRResult(
+                document_id=doc.id,
+                raw_text=ocr_result["text"],
+                processing_time=ocr_result["processing_time"]
+            )
+            db.add(ocr_record)
+            doc.status = DocumentStatus.OCR_DONE
+            db.commit()
 
-    except Exception as e:
-        logger.error(f"Document {document_id}: Processing failed - {str(e)}")
-        doc.status = DocumentStatus.ERROR
-        doc.error_message = str(e)
-        db.commit()
+            # Step 2: Structuring
+            doc.status = DocumentStatus.STRUCTURING
+            db.commit()
+            logger.info(f"Document {document_id}: Starting structuring")
+
+            struct_result = await structurizer_service.structure_data(
+                ocr_result["text"],
+                columns
+            )
+            logger.info(f"Document {document_id}: Structuring completed in {struct_result['processing_time']}ms, confidence: {struct_result['confidence']}%")
+
+            extracted = ExtractedData(
+                document_id=doc.id,
+                data=struct_result["data"],
+                confidence=struct_result["confidence"],
+                processing_time=struct_result["processing_time"]
+            )
+            db.add(extracted)
+            doc.status = DocumentStatus.COMPLETED
+            db.commit()
+            logger.info(f"Document {document_id}: Processing completed successfully")
+
+        except Exception as e:
+            logger.error(f"Document {document_id}: Processing failed - {str(e)}")
+            doc.status = DocumentStatus.ERROR
+            doc.error_message = str(e)
+            db.commit()
+    finally:
+        db.close()
 
 
 @app.post("/api/process/{document_id}")
@@ -405,7 +410,7 @@ async def process_document(
     if doc.status not in [DocumentStatus.PENDING, DocumentStatus.ERROR]:
         raise HTTPException(status_code=400, detail="Document already processing or completed")
 
-    background_tasks.add_task(process_document_task, document_id, db)
+    background_tasks.add_task(process_document_task, document_id)
 
     return {"status": "processing_started", "document_id": document_id}
 
@@ -423,7 +428,7 @@ async def process_batch(
     ).all()
 
     for doc in documents:
-        background_tasks.add_task(process_document_task, doc.id, db)
+        background_tasks.add_task(process_document_task, doc.id)
 
     return {"status": "batch_started", "count": len(documents)}
 
@@ -438,61 +443,73 @@ async def process_stream(schema_id: int, db: Session = Depends(get_db)):
 
     async def event_generator():
         last_states = {}
+        logger.info(f"SSE: Starting stream for schema {schema_id}")
+        # Create own session for SSE - independent from request
+        sse_db = SessionLocal()
 
-        while True:
-            documents = db.query(Document).filter(Document.schema_id == schema_id).all()
+        try:
+            while True:
+                # Close and reopen transaction to see fresh data from other sessions
+                sse_db.rollback()
+                documents = sse_db.query(Document).filter(Document.schema_id == schema_id).all()
 
-            for doc in documents:
-                current_state = {
-                    "id": doc.id,
-                    "status": doc.status.value,
-                    "error": doc.error_message
-                }
+                for doc in documents:
+                    current_state = {
+                        "id": doc.id,
+                        "status": doc.status.value,
+                        "error": doc.error_message
+                    }
 
-                # Check if state changed
-                if last_states.get(doc.id) != current_state:
-                    last_states[doc.id] = current_state
+                    # Check if state changed
+                    if last_states.get(doc.id) != current_state:
+                        last_states[doc.id] = current_state
+                        logger.info(f"SSE: Document {doc.id} status changed to {doc.status.value}")
 
-                    # Get extracted data if available
-                    extracted = None
-                    if doc.extracted_data:
-                        extracted = doc.extracted_data.data
+                        # Get extracted data if available
+                        extracted = None
+                        if doc.extracted_data:
+                            extracted = doc.extracted_data.data
 
-                    ocr_text = None
-                    if doc.ocr_result:
-                        ocr_text = doc.ocr_result.raw_text[:500]  # First 500 chars
+                        ocr_text = None
+                        if doc.ocr_result:
+                            ocr_text = doc.ocr_result.raw_text[:500]  # First 500 chars
 
-                    progress = {
-                        DocumentStatus.PENDING.value: 0,
-                        DocumentStatus.OCR_PROCESSING.value: 25,
-                        DocumentStatus.OCR_DONE.value: 50,
-                        DocumentStatus.STRUCTURING.value: 75,
-                        DocumentStatus.COMPLETED.value: 100,
-                        DocumentStatus.ERROR.value: 0
-                    }.get(doc.status.value, 0)
+                        progress = {
+                            DocumentStatus.PENDING.value: 0,
+                            DocumentStatus.OCR_PROCESSING.value: 25,
+                            DocumentStatus.OCR_DONE.value: 50,
+                            DocumentStatus.STRUCTURING.value: 75,
+                            DocumentStatus.COMPLETED.value: 100,
+                            DocumentStatus.ERROR.value: 0
+                        }.get(doc.status.value, 0)
 
-                    data = ProcessingStatusResponse(
-                        document_id=doc.id,
-                        status=doc.status,
-                        progress=progress,
-                        message=f"Processing: {doc.status.value}",
-                        ocr_text=ocr_text,
-                        extracted_data=extracted
-                    )
+                        data = ProcessingStatusResponse(
+                            document_id=doc.id,
+                            status=doc.status,
+                            progress=progress,
+                            message=f"Processing: {doc.status.value}",
+                            ocr_text=ocr_text,
+                            extracted_data=extracted
+                        )
 
-                    yield f"data: {data.model_dump_json()}\n\n"
+                        event_data = data.model_dump_json()
+                        logger.info(f"SSE: Sending event for doc {doc.id}")
+                        yield f"data: {event_data}\n\n"
 
-            # Check if all done
-            all_done = all(
-                doc.status in [DocumentStatus.COMPLETED, DocumentStatus.ERROR]
-                for doc in documents
-            ) if documents else True
+                # Check if all done
+                all_done = all(
+                    doc.status in [DocumentStatus.COMPLETED, DocumentStatus.ERROR]
+                    for doc in documents
+                ) if documents else True
 
-            if all_done and documents:
-                yield f"data: {{'event': 'complete'}}\n\n"
-                break
+                if all_done and documents:
+                    logger.info(f"SSE: All documents done, closing stream")
+                    yield 'data: {"event": "complete"}\n\n'
+                    break
 
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            sse_db.close()
 
     return StreamingResponse(
         event_generator(),
@@ -500,6 +517,7 @@ async def process_stream(schema_id: int, db: Session = Depends(get_db)):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
         }
     )
 
