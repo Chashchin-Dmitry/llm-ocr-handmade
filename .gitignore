@@ -45,3 +45,6 @@ models/
 
 # HuggingFace cache (если случайно в проекте)
 .huggingface/
+
+# Article draft
+ARTICLE_GUIDE.md
