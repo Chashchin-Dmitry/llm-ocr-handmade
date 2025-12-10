@@ -1,69 +1,116 @@
 # OCR Document Digitization - Текущий этап
 
-> Последнее обновление: 2025-12-10 15:57
+> Последнее обновление: 2025-12-10 17:10
 
 ---
 
-## ТЕКУЩИЙ СТАТУС: ✅ Система полностью работает!
+## СТАТУС: MVP ЗАВЕРШЁН
 
-Все сервисы запущены и работают.
+Система полностью работает. OCR пайплайн протестирован и функционирует.
 
 ---
 
-## Выполнено (2025-12-10)
+## Выполнено
 
-- ✅ Образ vLLM v0.11.2 скачан (43GB)
-- ✅ NVIDIA драйвер обновлён до 576.88 (CUDA 12.9)
-- ✅ docker-compose.yml исправлен
-- ✅ DeepSeek-OCR запущен (порт 8001)
-- ✅ Qwen 1.5B запущен (порт 8002)
-- ✅ Обе модели работают параллельно (17.3GB / 24GB)
-- ✅ Backend запущен (порт 8000)
+### Инфраструктура
+- NVIDIA Driver 576.88 (CUDA 12.9)
+- vLLM v0.11.2 (поддержка DeepSeek-OCR)
+- Docker Compose с 3 сервисами
+- MySQL 8.0 на хосте
+
+### AI модели
+- DeepSeek-OCR 3B (порт 8001, 30% GPU)
+- Qwen2.5-1.5B-Instruct (порт 8002, 35% GPU)
+- Обе модели работают параллельно (~17GB / 24GB)
+
+### Backend
+- FastAPI с async обработкой
+- Background tasks для OCR
+- SSE для real-time updates
+- PDF/DOC конвертация в изображения
+
+### Frontend
+- SPA на Alpine.js
+- Создание схем и колонок
+- Загрузка документов
+- Просмотр результатов
+
+---
+
+## Производительность
+
+| Метрика | Значение |
+|---------|----------|
+| OCR (3 страницы PDF) | ~21 сек |
+| Структуризация | ~0.5 сек |
+| Общее время | ~22 сек |
+| Confidence | 75% |
+
+---
+
+## Решённые проблемы
+
+| Проблема | Решение |
+|----------|---------|
+| DeepSeek-OCR 400 Bad Request | Специальный формат промпта `<image>\n<prompt>` |
+| max_tokens слишком большой | OCR: 3500, Qwen: 1024 |
+| Qwen 7B не влезает | Использовали 1.5B-Instruct |
+| Qwen контекст 2048 мал | Увеличили до 16384 |
+| SSE не видит изменения | Изолированные DB сессии + rollback() |
 
 ---
 
 ## Конфигурация
 
-| Параметр | Значение |
-|----------|----------|
-| Driver | 576.88 ✅ |
-| CUDA | 12.9 ✅ |
-| GPU | RTX 3090 24GB |
-| GPU Used | 17.3GB / 24GB |
-| vLLM | v0.11.2 |
-| DeepSeek-OCR | порт 8001, 40% GPU ✅ |
-| Qwen 1.5B | порт 8002, 20% GPU ✅ |
+```yaml
+# docker-compose.yml
+vllm-ocr:
+  --model deepseek-ai/DeepSeek-OCR
+  --max-model-len 4096
+  --gpu-memory-utilization 0.30
+
+vllm-qwen:
+  --model Qwen/Qwen2.5-1.5B-Instruct
+  --max-model-len 16384
+  --gpu-memory-utilization 0.35
+```
 
 ---
 
-## Следующие шаги
+## Endpoints
 
-1. ~~Запустить DeepSeek-OCR~~ ✅
-2. ~~Запустить Qwen параллельно~~ ✅ (использовали 1.5B вместо 7B)
-3. ~~Запустить backend~~ ✅
-4. Открыть UI: http://localhost:8000
-5. Протестировать OCR
-
----
-
-## Проблемы решены
-
-- **3B и 7B Qwen не влезают** → использовали 1.5B модель
-- Qwen 1.5B достаточен для структуризации JSON
+| Сервис | URL | Статус |
+|--------|-----|--------|
+| Frontend | http://localhost:8000 | OK |
+| DeepSeek-OCR | http://localhost:8001 | OK |
+| Qwen | http://localhost:8002 | OK |
+| Health | http://localhost:8000/api/health | OK |
 
 ---
 
 ## Мониторинг
 
 ```bash
+# Статус контейнеров
+docker ps
+
+# Логи backend
+docker logs ocr-backend -f
+
 # Логи моделей
 docker logs vllm-ocr --tail 20
 docker logs vllm-qwen --tail 20
 
-# GPU память
+# GPU
 nvidia-smi
-
-# Проверка endpoints
-curl http://localhost:8001/v1/models
-curl http://localhost:8002/v1/models
 ```
+
+---
+
+## Возможные улучшения (TODO)
+
+- [ ] Фильтрация grounding токенов из OCR output
+- [ ] Batch processing с очередью
+- [ ] Экспорт в Excel/CSV
+- [ ] Валидация извлечённых данных
+- [ ] Более умная модель (Qwen 7B/14B на большем GPU)
