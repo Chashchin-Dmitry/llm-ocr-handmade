@@ -9,8 +9,8 @@ OCR Document Digitization — система для оцифровки доку�
 - **Backend:** Python 3.11, FastAPI, SQLAlchemy
 - **Frontend:** HTML, Tailwind CSS, Alpine.js
 - **Database:** MySQL 8.0
-- **AI Models:** DeepSeek-OCR 3B, Qwen2.5-7B
-- **Inference:** vLLM 0.10.2
+- **AI Models:** DeepSeek-OCR 3B, Qwen2.5-1.5B-Instruct
+- **Inference:** vLLM 0.11.2
 - **Container:** Docker Compose
 
 ## Структура проекта
@@ -69,15 +69,16 @@ llm-ocr-handmade/
 ## Команды разработки
 
 ```bash
-# Запуск для разработки
-docker-compose up -d mysql
-cd backend && uvicorn main:app --reload
-
-# Полный запуск
+# Запуск всех сервисов
 docker-compose up -d
 
 # Логи моделей
 docker-compose logs -f vllm-ocr vllm-qwen
+
+# Проверка статуса
+curl http://localhost:8001/v1/models  # OCR
+curl http://localhost:8002/v1/models  # Qwen
+curl http://localhost:8000/api/health # Backend
 ```
 
 ## Важные файлы для редактирования
@@ -89,6 +90,20 @@ docker-compose logs -f vllm-ocr vllm-qwen
 
 ## GPU настройки (RTX 3090 24GB)
 
-- DeepSeek-OCR: 40% VRAM (~10GB)
-- Qwen2.5-7B: 50% VRAM (~12GB)
-- Суммарно: ~22GB из 24GB
+| Модель | Параметры | GPU % | VRAM |
+|--------|-----------|-------|------|
+| DeepSeek-OCR | 3B | 40% | ~10GB |
+| Qwen2.5-1.5B | 1.5B | 20% | ~5GB |
+| **Итого** | | | ~17GB / 24GB |
+
+**Требования:**
+- NVIDIA Driver 576+ (CUDA 12.9)
+- vLLM 0.11.2 (поддержка DeepSeek-OCR добавлена в v0.11.1)
+
+## Endpoints
+
+| Сервис | Порт | URL |
+|--------|------|-----|
+| Backend (UI) | 8000 | http://localhost:8000 |
+| DeepSeek-OCR | 8001 | http://localhost:8001 |
+| Qwen | 8002 | http://localhost:8002 |

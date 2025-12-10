@@ -24,8 +24,7 @@ services:
       --model deepseek-ai/DeepSeek-OCR
       --trust-remote-code
       --max-model-len 4096
-      --gpu-memory-utilization 0.4
-      --enable-prefix-caching false
+      --gpu-memory-utilization 0.30
     deploy:
       resources:
         reservations:
@@ -35,7 +34,7 @@ services:
               capabilities: [gpu]
 
   # vLLM Server for Qwen (структуризация)
-  # v0.12.0 требует CUDA 12.9+, у нас CUDA 12.8, поэтому v0.11.2
+  # Используем 3B версию чтобы влезть в оставшуюся GPU память
   vllm-qwen:
     image: vllm/vllm-openai:v0.11.2
     container_name: vllm-qwen
@@ -48,10 +47,10 @@ services:
     volumes:
       - ~/.cache/huggingface:/root/.cache/huggingface
     command: >
-      --model Qwen/Qwen2.5-7B-Instruct
+      --model Qwen/Qwen2.5-1.5B-Instruct
       --trust-remote-code
-      --max-model-len 8192
-      --gpu-memory-utilization 0.5
+      --max-model-len 2048
+      --gpu-memory-utilization 0.20
     deploy:
       resources:
         reservations:
